@@ -1,0 +1,26 @@
+{
+  "name": "crm_bakhodur",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "pm2 start dist/index.js --name crm_bakhodur",
+    "generate": "npx drizzle-kit generate",
+    "migrate": "npx drizzle-kit migrate",
+    "genmig": "npm run generate && npm run migrate"
+  },
+  "dependencies": {
+    "dotenv": "^17.2.2",
+    "drizzle-orm": "^0.44.5",
+    "drizzle-seed": "^0.3.1",
+    "@libsql/client": "^0.15.15",
+    "axios": "^1.12.2",
+    "cheerio": "^1.1.2"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.17",
+    "drizzle-kit": "^0.31.4",
+    "tsx": "^4.7.1",
+    "typescript": "^5.8.3"
+  }
+}
