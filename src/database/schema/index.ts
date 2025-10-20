@@ -11,7 +11,7 @@ export const oils = table('oils', {
     sae: t.text().notNull(),
     name: t.text().notNull().unique(),
     type: t.text().notNull(),
-    brand: t.text(),
+    url: t.text().notNull(),
 })
 
 export const oilPerformances = table('oil_performances', {
@@ -26,7 +26,6 @@ export const oilPerformances = table('oil_performances', {
 export const engines = table('engines', {
     id: t.integer().primaryKey(),
     type: t.text().notNull(), // Тип 1.0 2WD (CHZL/DKLA/DLAC) (95 л.с.) (70 кВт)	
-    url: t.text().notNull(),
     version: t.text().notNull(), // Версия 2018 - по н.в.
     displacement: t.text(), // Обём двигатля
     fuelType: t.text('fuel_type'), // Топлива
