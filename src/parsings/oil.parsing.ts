@@ -19,7 +19,8 @@ export class OilParsing {
     sae?: string,
     type?: string,
     name?: string,
-    url?: string
+    url?: string,
+    image_url?: string
     }
 
     const data: DataType = {
@@ -44,6 +45,11 @@ export class OilParsing {
         data.performance.push($(el).text())
       })
     })
+
+    const a = $('div.woocommerce-product-gallery__image')
+    .children('a')
+
+  data.image_url = $(a[0]).attr('href')
 
     return data;
   }

@@ -2,92 +2,36 @@ import { smartDelay } from './helpers/delay.helper.js'
 import { bootstrap } from './bootstrap.js'
 import axios from 'axios';
 
-// async function saveCarInDb() {
-//   const carsSiteUrl = 'https://podbor.ravenol.ru';
-//   const cs = await bootstrap.parsing.carParsing.cars();
-
-//   console.log(`Найдено ${cs.length} моделей\n`);
-//   let index = 0;
-
-//   for (const el of cs) {
-//     const carId = await bootstrap.service.carService.create({
-//       image: el.image || '',
-//       brand: el.brand || '',
-//       model: el.model || '',
-//     })
-
-//     index++;
-//     console.log(`🚗 [${index}/${cs.length}] ${el.model}`);
-
-//     // задержка перед запросом страницы модели
-//     await smartDelay(1);
-
-//     const engineInfoWithCommonInfo = await bootstrap.parsing.carParsing.carInfo(
-//       //`${carsSiteUrl}${el.url}`
-//     );
-
-
-//     for (const info of engineInfoWithCommonInfo) {
-//       try {
-//         // задержка перед запросом конкретного мотора
-//         await smartDelay(1.2);
-
-//         const d = await bootstrap.parsing.carParsing.motorInfo(
-//           //`${carsSiteUrl}${info.link}`
-//         );
-
-
-//         const a = await bootstrap.service.engineService.create({
-//           type: info.type || '',
-//           version: info.production || '',
-//           displacement: d.displacement || '',
-//           fuelType: d.fuelType || ''
-//         })
-
-
-//         await bootstrap.service.carService.addEngine(carId, a);
-
-//         for(const e of d.performances) {
-//           const i = await bootstrap.service.performanceService.getOrCreate(e)
-//           try {
-//             await bootstrap.service.engineService.addPerformance(a, i)
-//           } catch (err) {
-//             console.log(err)
-//           }
-//         }
-//       } catch (err) {
-//         if(err instanceof Error)
-//           console.error(`Ошибка при парсинге ${info.link}:`, err.message);
-//       }
-//     }
-//   }
-
-//   console.log('\n✅ Парсинг завершён');
-// }
-
-// async function saveOilInDb(url: string) {
-//   const data = await bootstrap.parsing.oilParsing.oil(url)
-
-//   const oilId = await bootstrap.service.oilService.create({
-//     name: data.name || '',
-//     sae: data.sae || '',
-//     type: data.type || '',
-//     url: data.url || '',
-//   });
-
-//   for (const el of data.performance) {
-//     console.log(el)
-//     const id = await bootstrap.service.performanceService.getOrCreate(el);
-//     console.log(id)
-//     await bootstrap.service.oilService.addPerformance(oilId, id)
-//   }
-
-//   return data;
-// }
-
 const DATABASE_HOST = 'http://localhost:1337'
+let w = 0;
+
+async function savePerformances(performances: string[]) {
+  const performancesSet = new Set<string>();
+
+  for(const e of performances) {
+    let res = await axios.get(`${DATABASE_HOST}/api/performances?filters[code][$eq]=${e}`);
+    
+    if(!res.data.data.length) {
+      const { data: performanceData } = await axios.post(`${DATABASE_HOST}/api/performances`, {
+        data: {
+          code: e
+        }
+      });
+      performancesSet.add(performanceData.data.documentId);
+    } else {
+      performancesSet.add(res.data.data[0].documentId);
+    }
+  }
+
+  return Array.from(performancesSet);
+}
 
 async function saveCarInProdDb() {
+  w++;
+  if(w === 2) {
+    return;
+  }
+
   const carsSiteUrl = 'https://podbor.ravenol.ru';
 
   // Получения отпарсинных машин
@@ -97,76 +41,82 @@ async function saveCarInProdDb() {
   let index = 0;
 
   for (const el of cs) {
-    // Создания машин в starpi
-    const res = await axios.post(`${DATABASE_HOST}/api/cars`, {
-      data: {
-        image_url: el.image,
-        brand: el.brand,
-        model: el.model,
-      }
-    })
-    
-    // carId из ответа на создания
-    const carId: number = res.data.data.id;
-    console.log(carId)
-
-    index++;
-    console.log(`🚗 [${index}/${cs.length}] ${el.model}`);
-
-    // задержка перед запросом страницы модели
-    await smartDelay(1);
-
-    const engineInfoWithCommonInfo = await bootstrap.parsing.carParsing.carInfo(
-      //`${carsSiteUrl}${el.url}`
-    );
-
-
-    for (const info of engineInfoWithCommonInfo) {
-      // задержка перед запросом конкретного мотора
-      await smartDelay(1.2);
-
-      const d = await bootstrap.parsing.carParsing.motorInfo(
-        //`${carsSiteUrl}${info.link}`
-      );
-
-      let a: number;
-
-      const res = 
-      await axios.post(`${DATABASE_HOST}/api/engines`, {
+    try {
+      console.log('Машина', el);
+      const res = await axios.post(`${DATABASE_HOST}/api/cars`, {
         data: {
-          title: info.type,
-          fuel_type: d.fuelType === 'Бензин' ? 'bz' : 'dz',
-          cars: [carId]
+          image_url: el.image,
+          brand: el.brand,
+          model: el.model,
+          title: `${el.brand} ${el.model}`
         }
       })
+      console.log('! Создана');
+      
+      // carId из ответа на создания
+      const carId: number = res.data.data.documentId;
+      console.log('CarId', carId);
 
-      a = res.data.data.id;
+      index++;
+      console.log(`🚗 [${index}/${cs.length}] ${el.model}`);
 
-      for(const e of d.performances) {
-        let i: number;
-        const { data } = 
-        await axios.get(`${DATABASE_HOST}/api/performances?filters[code][$eq]=${e}`)
-        if(!data.length) {
-          const { data } = await axios.post(`${DATABASE_HOST}/api/performances`, {
+      // задержка перед запросом страницы модели
+      await smartDelay(1);
+
+      const engineInfoWithCommonInfo = await bootstrap.parsing.carParsing.carInfo(
+        `${carsSiteUrl}${el.url}`
+      );
+
+      for (const info of engineInfoWithCommonInfo) {
+        // задержка перед запросом конкретного мотора
+        await smartDelay(1.2);
+
+        const d = await bootstrap.parsing.carParsing.motorInfo(
+          `${carsSiteUrl}${info.link}`
+        );
+
+        let a: string;
+        let res;
+
+        // Получение или создание двигателя
+        res = await axios.get(`${DATABASE_HOST}/api/engines?filters[title][$eq]=${info.type}`);
+
+        if(!res.data.data.length) {
+          res = await axios.post(`${DATABASE_HOST}/api/engines`, {
             data: {
-              code: e
+              title: info.type,
+              fuel_type: d.fuelType === 'Бензин' ? 'bz' : 'dz',
+              //cars: [carId]
             }
-          })
-          i = data.id;
+          });
+          a = res.data.data.documentId;
         } else {
-          i = data.id
+          a = res.data.data[0].documentId;
         }
+
+  
+
+        const performancesId = await savePerformances(d.performances);
+
+        console.log(`⚙️  Двигатель: ${info.type} - ${performancesId.length} performances`);
+
         try {
+          console.log('a')
           await axios.put(`${DATABASE_HOST}/api/engines/${a}`, {
             data: {
-              performances: res.data.data.performances.push(i)
+              performances: performancesId,
+              cars: [carId]
             }
-          })
-          await bootstrap.service.engineService.addPerformance(a, i)
+          });
         } catch (err) {
-          console.log(err)
+          if(err instanceof Error) {
+            console.log(err.message) 
+          }
         }
       }
+    } catch (error) {
+      //@ts-ignore
+      console.log(error.message)
     }
   }
 
@@ -176,27 +126,43 @@ async function saveCarInProdDb() {
 async function saveOilInProdDb(url: string) {
   const data = await bootstrap.parsing.oilParsing.oil(url)
 
-  const oilId = await bootstrap.service.oilService.create({
-    name: data.name || '',
-    sae: data.sae || '',
-    type: data.type || '',
-    url: data.url || '',
+  console.log(data)
+  const res = await axios.post(`${DATABASE_HOST}/api/oils`, {
+    data: {
+      title: data.name,
+      url: data.url,
+      image_url: data.image_url,
+    }
   });
 
-  for (const el of data.performance) {
-    console.log(el)
-    const id = await bootstrap.service.performanceService.getOrCreate(el);
-    console.log(id)
-    await bootstrap.service.oilService.addPerformance(oilId, id)
+  const oilId = res.data.data.documentId
+  console.log(oilId);
+  const performancesId = await savePerformances(data.performance);
+
+  try {
+    await axios.put(`${DATABASE_HOST}/api/oils/${oilId}`, {
+      data: {
+        performances: performancesId
+      }
+    });
+  } catch (err) {
+    if(err instanceof Error) {
+      console.log(err.message) 
+    }
   }
 
   return data;
 }
 
-export async function api() {
-  // await saveOilInDb('https://bravoil.ae/product/pro-drift-sn-cf-10w-60-fully-synthetic/')
-  // await saveOilInDb('https://bravoil.ae/product/pro-pao-sn-0w-20-fully-synthetic/')
-  // await saveOilInDb('https://bravoil.ae/product/pro-pao-c2-c3-sn-0w-30-fully-synthetic/')
 
-  await saveCarInProdDb();
+
+
+export async function api() {
+  //await saveCarInProdDb();
+  await saveOilInProdDb('https://bravoil.ae/product/pro-drift-sn-cf-10w-60-fully-synthetic/')
+  await saveOilInProdDb('https://bravoil.ae/product/pro-pao-sn-0w-20-fully-synthetic/')
+  await saveOilInProdDb('https://bravoil.ae/product/pro-pao-c2-c3-sn-0w-30-fully-synthetic/')
+  await saveOilInProdDb('https://bravoil.ae/product/evo-0w-40-sn-fully-synthetic/')
+  await saveOilInProdDb('https://bravoil.ae/product/evo-5w-50-sn-cf-fully-synthetic/')
+  await saveOilInProdDb('https://bravoil.ae/product/evo-10w-60-sn-cf-fully-synthetic/')
 }

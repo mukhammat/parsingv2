@@ -10,7 +10,8 @@ export class PerformanceService {
         })
         .returning({
             id: schema.performances.id
-        });
+        })
+        .onConflictDoNothing();
         
         return p.id;
     }
