@@ -1,6 +1,27 @@
 import { parsingHelper, parsingWithoutSaveHelper } from '../helpers/parsing.helper.js'
 
+export type TransmissionType = {
+  title?: string,
+  performances?: string[],
+}
+
+export type DataType = {
+  model?: string,
+  fuelType?: string,
+  displacement?: string,
+  version?: string,
+  performances: string[],
+  transmission: TransmissionType[]
+}
+
+export type ResultType = {
+  type?: string
+  production?: string 
+  link?: string
+}
+
 export class CarParsing {
+
   async cars(url?: string) {
     type CarInfoType = {
       image?: string,
@@ -40,12 +61,6 @@ export class CarParsing {
           'motors.html'
         )
 
-    type ResultType = {
-      type?: string
-      production?: string 
-      link?: string
-    }
-
     const result: ResultType[] = [];
 
     $(".rav_types_content table tbody tr").each((_, el) => {
@@ -67,16 +82,9 @@ export class CarParsing {
           'moror_info.html'
         )
 
-    type DataType = {
-      model?: string,
-      fuelType?: string,
-      displacement?: string,
-      version?: string,
-      performances: string[]
-    }
-
     const data: DataType = {
-      performances: []
+      performances: [],
+      transmission: []
     }
 
     $('.rav_selection_head_title_top_title_col.col-lg-10.col-md-9.col-12').each((_, el) => {
@@ -100,6 +108,43 @@ export class CarParsing {
       $(a).each((_, el) => {
         data.performances?.push($(el).text().trim())
       })
+
+      const normalizeCategory = (title: string) => {
+        title = title.toLowerCase();
+        if (title.includes('кпп') || title.includes('трансмис')) return 'gearbox';
+
+        return 'other';
+      };
+
+      let isThereTransmition = false;
+
+      const cpp = $(el).find('div.node_product_item_preview_text');
+      $(cpp).each((_, el) => {
+        const a = $(el).text().trim()
+        const category = normalizeCategory(a);
+        if(category === 'gearbox') {
+          isThereTransmition = true;
+        }
+      });
+
+      if(isThereTransmition) {
+        let title = ''
+        const cpp = $(el).find('h4.aggregate_node_title');
+        $(cpp).each((_, el) => {
+          title = $(el).text().trim()
+        });
+
+        const d = $(el).find('div.node_product_item_preview_text').find('a');
+
+        const cppPerformanses: string[] = []
+        $(d).each((_, el) => {
+          cppPerformanses.push($(el).text().trim())
+        })
+          data.transmission?.push({
+            title,
+            performances: cppPerformanses
+          })
+      }
     })
 
     return data;

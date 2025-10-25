@@ -1,9 +1,96 @@
 import { smartDelay } from './helpers/delay.helper.js'
 import { bootstrap } from './bootstrap.js'
 import axios from 'axios';
+import type { TransmissionType, DataType, ResultType} from './parsings/car.parsing.js'
 
 const DATABASE_HOST = 'http://localhost:1337'
 let w = 0;
+
+async function saveEngineInfo(d: DataType, info: ResultType, carId: string) {  
+  let a: string;
+  let res;
+
+  // Получение или создание двигателя
+  res = await axios.get(`${DATABASE_HOST}/api/engines?filters[title][$eq]=${info.type}`);
+
+  if(!res.data.data.length) {
+    res = await axios.post(`${DATABASE_HOST}/api/engines`, {
+      data: {
+        title: info.type,
+        fuel_type: d.fuelType === 'Бензин' ? 'bz' : 'dz',
+      }
+    });
+    a = res.data.data.documentId;
+  } else {
+    a = res.data.data[0].documentId;
+  }
+
+
+
+  const performancesId = await savePerformances(d.performances);
+
+  console.log(`⚙️  Двигатель: ${info.type} - ${performancesId.length} performances`);
+
+  try {
+    console.log('a')
+    await axios.put(`${DATABASE_HOST}/api/engines/${a}`, {
+      data: {
+        performances: performancesId,
+        cars: [carId]
+      }
+    });
+  } catch (err) {
+    if(err instanceof Error) {
+      console.log(err.message) 
+    }
+  }
+}
+
+async function saveTransmissions(transmissions: TransmissionType[], carId: string) {
+  try {
+    for (const tr of transmissions) {
+      let a: string;
+      let res;
+
+      // Получение или создание двигателя
+      res = await axios.get(`${DATABASE_HOST}/api/transmissions?filters[title][$eq]=${tr.title}`);
+
+      if(!res.data.data.length) {
+        res = await axios.post(`${DATABASE_HOST}/api/transmissions`, {
+          data: {
+            title: tr.title,
+          }
+        });
+        a = res.data.data.documentId;
+      } else {
+        a = res.data.data[0].documentId;
+      }
+
+
+
+
+
+      const performancesId = await savePerformances(tr.performances!);
+
+      try {
+        await axios.put(`${DATABASE_HOST}/api/transmissions/${a}`, {
+          data: {
+            performances: performancesId,
+            cars: [carId]
+          }
+        });
+      } catch (err) {
+        if(err instanceof Error) {
+          console.log(err.message) 
+        }
+      }
+      
+    }
+    
+  } catch (error) {
+    console.log('Error!')
+  }
+}
 
 async function savePerformances(performances: string[]) {
   const performancesSet = new Set<string>();
@@ -54,7 +141,7 @@ async function saveCarInProdDb() {
       console.log('! Создана');
       
       // carId из ответа на создания
-      const carId: number = res.data.data.documentId;
+      const carId: string = res.data.data.documentId;
       console.log('CarId', carId);
 
       index++;
@@ -75,44 +162,8 @@ async function saveCarInProdDb() {
           `${carsSiteUrl}${info.link}`
         );
 
-        let a: string;
-        let res;
-
-        // Получение или создание двигателя
-        res = await axios.get(`${DATABASE_HOST}/api/engines?filters[title][$eq]=${info.type}`);
-
-        if(!res.data.data.length) {
-          res = await axios.post(`${DATABASE_HOST}/api/engines`, {
-            data: {
-              title: info.type,
-              fuel_type: d.fuelType === 'Бензин' ? 'bz' : 'dz',
-              //cars: [carId]
-            }
-          });
-          a = res.data.data.documentId;
-        } else {
-          a = res.data.data[0].documentId;
-        }
-
-  
-
-        const performancesId = await savePerformances(d.performances);
-
-        console.log(`⚙️  Двигатель: ${info.type} - ${performancesId.length} performances`);
-
-        try {
-          console.log('a')
-          await axios.put(`${DATABASE_HOST}/api/engines/${a}`, {
-            data: {
-              performances: performancesId,
-              cars: [carId]
-            }
-          });
-        } catch (err) {
-          if(err instanceof Error) {
-            console.log(err.message) 
-          }
-        }
+        await saveEngineInfo(d, info, carId)
+        await saveTransmissions(d.transmission, carId)
       }
     } catch (error) {
       //@ts-ignore
@@ -158,11 +209,12 @@ async function saveOilInProdDb(url: string) {
 
 
 export async function api() {
+  await saveCarInProdDb()
   //await saveCarInProdDb();
-  await saveOilInProdDb('https://bravoil.ae/product/pro-drift-sn-cf-10w-60-fully-synthetic/')
-  await saveOilInProdDb('https://bravoil.ae/product/pro-pao-sn-0w-20-fully-synthetic/')
-  await saveOilInProdDb('https://bravoil.ae/product/pro-pao-c2-c3-sn-0w-30-fully-synthetic/')
-  await saveOilInProdDb('https://bravoil.ae/product/evo-0w-40-sn-fully-synthetic/')
-  await saveOilInProdDb('https://bravoil.ae/product/evo-5w-50-sn-cf-fully-synthetic/')
-  await saveOilInProdDb('https://bravoil.ae/product/evo-10w-60-sn-cf-fully-synthetic/')
+  //await saveOilInProdDb('https://bravoil.ae/product/pro-drift-sn-cf-10w-60-fully-synthetic/')
+  //await saveOilInProdDb('https://bravoil.ae/product/pro-pao-sn-0w-20-fully-synthetic/')
+  //await saveOilInProdDb('https://bravoil.ae/product/pro-pao-c2-c3-sn-0w-30-fully-synthetic/')
+  //await saveOilInProdDb('https://bravoil.ae/product/evo-0w-40-sn-fully-synthetic/')
+  //await saveOilInProdDb('https://bravoil.ae/product/evo-5w-50-sn-cf-fully-synthetic/')
+  //await saveOilInProdDb('https://bravoil.ae/product/evo-10w-60-sn-cf-fully-synthetic/')
 }
