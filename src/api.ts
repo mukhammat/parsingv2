@@ -6,6 +6,24 @@ import type { TransmissionType, DataType, ResultType} from './parsings/car.parsi
 const DATABASE_HOST = 'http://localhost:1337'
 let w = 0;
 
+async function saveSae(title: string) {
+  let oilId: string;
+  let res = await axios(`${DATABASE_HOST}/api/sae-grades?filters[title][$eq]=${title}`);
+
+  if(res.data.data.length) {
+    oilId = res.data.data[0].documentId;
+  } else {
+    res = await axios.post(`${DATABASE_HOST}/api/sae-grades`, {
+      data: {
+        title,
+      }
+    });
+    oilId = res.data.data.documentId;
+  }
+
+  return oilId;
+}
+
 async function saveEngineInfo(d: DataType, info: ResultType, carId: string) {  
   let a: string;
   let res;
@@ -65,9 +83,6 @@ async function saveTransmissions(transmissions: TransmissionType[], carId: strin
       } else {
         a = res.data.data[0].documentId;
       }
-
-
-
 
 
       const performancesId = await savePerformances(tr.performances!);
@@ -187,13 +202,14 @@ async function saveOilInProdDb(url: string) {
   });
 
   const oilId = res.data.data.documentId
-  console.log(oilId);
   const performancesId = await savePerformances(data.performance);
+  const saeId = await saveSae(data.sae!);
 
   try {
     await axios.put(`${DATABASE_HOST}/api/oils/${oilId}`, {
       data: {
-        performances: performancesId
+        performances: performancesId,
+        sae_grade: saeId
       }
     });
   } catch (err) {
@@ -209,7 +225,8 @@ async function saveOilInProdDb(url: string) {
 
 
 export async function api() {
-  await saveCarInProdDb()
+  await saveOilInProdDb('https://bravoil.ae/product/pro-drift-sn-cf-10w-60-fully-synthetic/')
+  
   //await saveCarInProdDb();
   //await saveOilInProdDb('https://bravoil.ae/product/pro-drift-sn-cf-10w-60-fully-synthetic/')
   //await saveOilInProdDb('https://bravoil.ae/product/pro-pao-sn-0w-20-fully-synthetic/')
