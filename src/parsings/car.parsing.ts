@@ -1,8 +1,9 @@
 import { parsingHelper, parsingWithoutSaveHelper } from '../helpers/parsing.helper.js'
 
 export type TransmissionType = {
-  title?: string,
-  performances?: string[],
+  title: string,
+  performances: string[],
+  sae: string[], // ✅ Добавили SAE для трансмиссии
 }
 
 export type DataType = {
@@ -11,7 +12,8 @@ export type DataType = {
   displacement?: string,
   version?: string,
   performances: string[],
-  transmission: TransmissionType[]
+  transmission: TransmissionType[],
+  sae: string[], // SAE для двигателя
 }
 
 export type ResultType = {
@@ -32,7 +34,7 @@ export class CarParsing {
 
     const result: CarInfoType[] = [];
 
-      const $ = url
+    const $ = url
       ? await parsingWithoutSaveHelper(url)
       : await parsingHelper(
           'https://podbor.ravenol.ru/1-cars/36-audi/#shopgroup_80',
@@ -84,68 +86,293 @@ export class CarParsing {
 
     const data: DataType = {
       performances: [],
-      transmission: []
+      transmission: [],
+      sae: []
     }
 
-    $('.rav_selection_head_title_top_title_col.col-lg-10.col-md-9.col-12').each((_, el) => {
-      const as = $(el).find('a');
-      const engine = $(as[2]).text();
+    const engineOilUrls: string[] = []
+    const transmissionData: Map<string, { performances: string[], oilUrls: string[] }> = new Map()
 
-      data.model = $(as[1]).text();
-      data.displacement = engine.split(' ')[0];
-    })
+    const normalizeCategory = (title: string) => {
+      title = title.toLowerCase();
+      if (title.includes('кпп') || title.includes('трансмис')) return 'gearbox';
+      if (title.includes('двигат')) return 'engine';
+      return 'other';
+    };
 
-    $('.rav_selection_head_info_container').map((_, el) => {
-      const as = $(el).find('p');
-      const fuelType = $(as).find('strong');
-      data.fuelType = $(fuelType[0]).text();
-    })
-
-    $('div.aggregate_node.active').each((_, el) => {
-      const d = $(el).find('div.node_product_item_preview_text')[0];
-      const a = $(d).find('a');
-
-      $(a).each((_, el) => {
-        data.performances?.push($(el).text().trim())
-      })
-
-      const normalizeCategory = (title: string) => {
-        title = title.toLowerCase();
-        if (title.includes('кпп') || title.includes('трансмис')) return 'gearbox';
-
-        return 'other';
-      };
-
-      let isThereTransmition = false;
-
-      const cpp = $(el).find('div.node_product_item_preview_text');
-      $(cpp).each((_, el) => {
-        const a = $(el).text().trim()
-        const category = normalizeCategory(a);
-        if(category === 'gearbox') {
-          isThereTransmition = true;
+    // ✅ Шаг 1: Собираем все данные синхронно
+    $('div.aggregate_node').each((_, el) => {
+      // Определяем категорию
+      let category = 'other';
+      $(el).find('div.node_product_item_preview_text').each((_, textEl) => {
+        const cat = normalizeCategory($(textEl).text().trim());
+        if (cat !== 'other') {
+          category = cat;
         }
       });
 
-      if(isThereTransmition) {
-        let title = ''
-        const cpp = $(el).find('h4.aggregate_node_title');
-        $(cpp).each((_, el) => {
-          title = $(el).text().trim()
+      // ✅ Собираем ВСЕ URL масел из узла (может быть несколько продуктов в одном узле)
+      const oilUrls: string[] = [];
+      
+      // Ищем все node_product_item в узле и собираем URL из каждого
+      const productItems = $(el).find('div.node_product_item');
+      
+      productItems.each((idx, productEl) => {
+        // Пробуем разные варианты селекторов для поиска ссылки на продукт
+        const urlSelectors = [
+          'div.node_product_item_title_wrapp h4 a',
+          'div.node_product_item_title a',
+          'h4 a',
+          'a[href*="shop.ravenol"]',
+          'a[href*="/product/"]'
+        ];
+        
+        for (const selector of urlSelectors) {
+          const url = $(productEl).find(selector).first().attr('href');
+          if (url && url.trim()) {
+            const fullUrl = url.startsWith('http') ? url : `https://shop.ravenol.su${url}`;
+            if (!oilUrls.includes(fullUrl)) {
+              oilUrls.push(fullUrl);
+            }
+            break; // Нашли URL для этого продукта, переходим к следующему
+          }
+        }
+      });
+      
+      // Если не нашли через node_product_item, пробуем старый способ
+      if (oilUrls.length === 0) {
+        $(el).find('div.node_product_item_title_wrapp h4 a, div.node_product_item_title a, h4.node_product_item_title a').each((_, linkEl) => {
+          const url = $(linkEl).attr('href');
+          if (url && url.trim()) {
+            const fullUrl = url.startsWith('http') ? url : `https://shop.ravenol.su${url}`;
+            if (!oilUrls.includes(fullUrl)) {
+              oilUrls.push(fullUrl);
+            }
+          }
         });
-
-        const d = $(el).find('div.node_product_item_preview_text').find('a');
-
-        const cppPerformanses: string[] = []
-        $(d).each((_, el) => {
-          cppPerformanses.push($(el).text().trim())
-        })
-          data.transmission?.push({
-            title,
-            performances: cppPerformanses
-          })
       }
-    })
+
+      // Собираем performances для текущего узла
+      const d = $(el).find('div.node_product_item_preview_text').first();
+      const links = d.find('a');
+      const currentPerformances: string[] = [];
+
+      links.each((_, linkEl) => {
+        const code = $(linkEl).text().trim();
+        if (code) {
+          currentPerformances.push(code);
+          // ✅ Добавляем в общий список только уникальные
+          if (!data.performances.includes(code)) {
+            data.performances.push(code);
+          }
+        }
+      });
+
+      // ✅ Разделяем по категориям
+      if (category === 'engine') {
+        for (const oilUrl of oilUrls) {
+          if (!oilUrl) continue;
+          
+          // ✅ Исключаем антифризы и другие не-масла
+          const urlLower = oilUrl.toLowerCase();
+          const isNotOil = urlLower.includes('antifriz') || 
+                          urlLower.includes('antifreeze') || 
+                          urlLower.includes('coolant') ||
+                          urlLower.includes('охлажд') ||
+                          urlLower.includes('promyvka') ||
+                          urlLower.includes('промывк') ||
+                          urlLower.includes('cleaner') ||
+                          urlLower.includes('очист');
+          
+          if (!isNotOil) {
+            engineOilUrls.push(oilUrl);
+          }
+        }
+      } else if (category === 'gearbox') {
+        // ✅ Очищаем заголовок от лишних символов
+        const title = $(el).find('h4.aggregate_node_title')
+          .text()
+          .trim()
+          .replace(/\s+/g, ' ');
+        
+        if (title) {
+          if (!transmissionData.has(title)) {
+            transmissionData.set(title, { performances: [], oilUrls: [] });
+          }
+          const transData = transmissionData.get(title)!;
+          // ✅ Сохраняем performances из текущего узла
+          transData.performances.push(...currentPerformances);
+          // ✅ Добавляем все URL масел из узла
+          for (const url of oilUrls) {
+            if (url && !transData.oilUrls.includes(url)) {
+              transData.oilUrls.push(url);
+            }
+          }
+        }
+      }
+    });
+
+    // ✅ Функция нормализации SAE (приведение к верхнему регистру W)
+    const normalizeSae = (sae: string): string => {
+      return sae.trim().replace(/w/g, 'W'); // Приводим 'w' к 'W'
+    };
+    
+    // ✅ Функция проверки уникальности SAE (с учетом нормализации)
+    const isSaeUnique = (sae: string, saeList: string[]): boolean => {
+      const normalized = normalizeSae(sae);
+      return !saeList.some(existing => normalizeSae(existing) === normalized);
+    };
+    
+    // ✅ Шаг 2: Парсим SAE для двигателей
+    const uniqueEngineUrls = [...new Set(engineOilUrls)];
+    
+    for (const oilUrl of uniqueEngineUrls) {
+      try {
+        const q = await parsingWithoutSaveHelper(oilUrl);
+        
+        // ✅ Способ 1: Ищем SAE в таблице атрибутов
+        const saesFromTable = q('div.product_tabs')
+          .children('div.product_tab.product_tab_attributes')
+          .find('tr.fe_sae');
+        
+        let foundSae = false;
+        
+        saesFromTable.each((_, el) => {
+          const sae = q(el).find('.value').text().trim();
+          if (sae && sae.length > 0 && isSaeUnique(sae, data.sae)) {
+            data.sae.push(sae);
+            foundSae = true;
+          }
+        });
+        
+        // ✅ Способ 2: Если в таблице не нашли, ищем SAE в тексте страницы (например, в названии)
+        if (!foundSae) {
+          // Пробуем найти SAE в названии товара (формат типа "10W-40", "5W-30" и т.д.)
+          const titleText = q('h1').text() || '';
+          const saePattern = /\b(\d+W-\d+)\b/gi;
+          const matches = titleText.match(saePattern);
+          
+          if (matches) {
+            for (const match of matches) {
+              const sae = match.trim();
+              if (sae && isSaeUnique(sae, data.sae)) {
+                data.sae.push(sae);
+                foundSae = true;
+              }
+            }
+          }
+        }
+        
+        // ✅ Способ 3: Ищем в других местах на странице
+        if (!foundSae) {
+          // Ищем все вхождения SAE в тексте страницы
+          const allText = q('body').text();
+          const saePattern = /\b(\d+W-\d+)\b/gi;
+          const allMatches = allText.match(saePattern);
+          
+          if (allMatches) {
+            const uniqueMatches = [...new Set(allMatches)];
+            for (const match of uniqueMatches) {
+              const sae = match.trim();
+              if (sae && isSaeUnique(sae, data.sae)) {
+                data.sae.push(sae);
+                foundSae = true;
+              }
+            }
+          }
+        }
+      } catch (error) {
+        console.error(`Error parsing engine oil ${oilUrl}:`, error);
+      }
+    }
+    
+    // ✅ Удаляем дубликаты SAE (нормализуем и оставляем уникальные)
+    const normalizedSaeSet = new Set<string>();
+    const uniqueSaeList: string[] = [];
+    
+    for (const sae of data.sae) {
+      const normalized = normalizeSae(sae);
+      if (!normalizedSaeSet.has(normalized)) {
+        normalizedSaeSet.add(normalized);
+        uniqueSaeList.push(normalized); // Сохраняем нормализованную версию
+      }
+    }
+    
+    data.sae = uniqueSaeList;
+
+    // ✅ Шаг 3: Парсим SAE для трансмиссий
+    for (const [title, transData] of transmissionData.entries()) {
+      const transmissionSae: string[] = [];
+      const uniqueTransUrls = [...new Set(transData.oilUrls)];
+
+      for (const oilUrl of uniqueTransUrls) {
+        try {
+          const q = await parsingWithoutSaveHelper(oilUrl);
+          const saes = q('div.product_tabs')
+            .children('div.product_tab.product_tab_attributes')
+            .find('tr.fe_sae');
+          
+          saes.each((_, el) => {
+            const sae = q(el).find('.value').text().trim();
+            if (sae && sae.length > 0) {
+              // Проверяем уникальность с учетом нормализации
+              const normalized = normalizeSae(sae);
+              if (!transmissionSae.some(existing => normalizeSae(existing) === normalized)) {
+                transmissionSae.push(sae);
+              }
+            }
+          });
+        } catch (error) {
+          console.error(`Error parsing transmission oil ${oilUrl}:`, error);
+        }
+      }
+
+      // ✅ Удаляем дубликаты SAE для трансмиссии (нормализуем и оставляем уникальные)
+      const normalizedTransSaeSet = new Set<string>();
+      const uniqueTransSaeList: string[] = [];
+      
+      for (const sae of transmissionSae) {
+        const normalized = normalizeSae(sae);
+        if (!normalizedTransSaeSet.has(normalized)) {
+          normalizedTransSaeSet.add(normalized);
+          uniqueTransSaeList.push(normalized); // Сохраняем нормализованную версию
+        }
+      }
+
+      data.transmission.push({
+        title,
+        performances: [...new Set(transData.performances)], // Убираем дубликаты
+        sae: uniqueTransSaeList
+      });
+    }
+
+    // ✅ Шаг 4: Собираем метаданные
+    $('.rav_selection_head_title_top_title_col.col-lg-10.col-md-9.col-12').each((_, el) => {
+      const as = $(el).find('a');
+      if (as.length >= 3 && as[2]) {
+        const engine = $(as[2]).text();
+        if (engine) {
+          data.displacement = engine.split(' ')[0];
+        }
+      }
+      if (as.length >= 2 && as[1]) {
+        const model = $(as[1]).text();
+        if (model) {
+          data.model = model;
+        }
+      }
+    });
+
+    $('.rav_selection_head_info_container').each((_, el) => {
+      const as = $(el).find('p');
+      const fuelType = $(as).find('strong');
+      if (fuelType.length > 0 && fuelType[0]) {
+        const fuel = $(fuelType[0]).text();
+        if (fuel) {
+          data.fuelType = fuel;
+        }
+      }
+    });
 
     return data;
   }

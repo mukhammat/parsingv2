@@ -1,5 +1,5 @@
 // простая функция задержки
-const DELAY_BASE = 5000;
+const DELAY_BASE = 1000;
 
 export const delay = (ms: number) => new Promise(res => setTimeout(res, ms));
 
