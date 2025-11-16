@@ -1,7 +1,9 @@
 import { smartDelay } from './helpers/delay.helper.js'
 import { bootstrap } from './bootstrap.js'
 import axios from 'axios';
-import type { TransmissionType, DataType, ResultType} from './parsings/car.parsing.js'
+import type { ResultType} from './parsings/car.parsing.js'
+import type { TransmissionType, DataType, } from './parsings/engine.parsing.js'
+import { log } from './helpers/loging.helper.js'
 
 const DATABASE_HOST = 'http://localhost:1337'
 
@@ -64,10 +66,17 @@ async function saveEngineInfo(d: DataType, info: ResultType, carId: string) {
       a = res.data.data[0].documentId;
     }
 
-    const performancesId = await savePerformances(d.performances);
+    // ✅ Объединяем performances, API и ACEA в один массив для сохранения
+    const allPerformances = [
+      ...d.performances,
+      ...(d.api || []).map(api => `API ${api}`), // Добавляем префикс "API " для значений API
+      ...(d.acea || []).map(acea => `ACEA ${acea}`) // Добавляем префикс "ACEA " для значений ACEA
+    ];
+    
+    const performancesId = await savePerformances(allPerformances);
     const saeIds = await saveSaeGrades(d.sae);
 
-    console.log(`⚙️  Двигатель: ${info.type} - ${performancesId.length} performances, ${saeIds.length} SAE`);
+    console.log(`⚙️  Двигатель: ${info.type} - ${performancesId.length} performances (включая ${d.api?.length || 0} API, ${d.acea?.length || 0} ACEA), ${saeIds.length} SAE`);
 
     // ✅ Формируем данные для обновления
     const updateData: any = {
@@ -116,10 +125,17 @@ async function saveTransmissions(transmissions: TransmissionType[], carId: strin
           a = res.data.data[0].documentId;
         }
 
-        const performancesId = await savePerformances(tr.performances);
+        // ✅ Объединяем performances, API и ACEA в один массив для сохранения
+        const allPerformances = [
+          ...tr.performances,
+          ...(tr.api || []).map(api => `API ${api}`), // Добавляем префикс "API " для значений API
+          ...(tr.acea || []).map(acea => `ACEA ${acea}`) // Добавляем префикс "ACEA " для значений ACEA
+        ];
+        
+        const performancesId = await savePerformances(allPerformances);
         const saeIds = await saveSaeGrades(tr.sae);
 
-        console.log(`🔧 Трансмиссия: ${tr.title} - ${performancesId.length} performances, ${saeIds.length} SAE`);
+        console.log(`🔧 Трансмиссия: ${tr.title} - ${performancesId.length} performances (включая ${tr.api?.length || 0} API, ${tr.acea?.length || 0} ACEA), ${saeIds.length} SAE`);
 
         // ✅ Получаем существующие связи с машинами
         const existingTransmission = await axios.get(`${DATABASE_HOST}/api/transmissions/${a}?populate=cars`);
@@ -230,7 +246,7 @@ async function saveCarInProdDb() {
           // задержка перед запросом конкретного мотора
           await smartDelay(1.2);
 
-          const d = await bootstrap.parsing.carParsing.motorInfo(
+          const d = await bootstrap.parsing.engineParsing.motorInfo(
             `${carsSiteUrl}${info.link}`
           );
 
@@ -258,17 +274,40 @@ async function saveCarInProdDb() {
 
 // Функция для проверки валидности SAE формата
 function isValidSae(sae: string): boolean {
-  // Паттерн для валидного SAE: цифры + W + (опционально) дефис + цифры
-  // Примеры: 0W-16, 0W-20, 10W-40, 70W и т.д.
-  const saePattern = /^\d+W(-\d+)?$/;
-  return saePattern.test(sae.trim());
+  if (!sae) return false;
+  const trimmed = sae.trim();
+  
+  // Исключаем стандарты и спецификации (ASTM, ISO, MIL и т.д.)
+  const excludedPatterns = [
+    /^ASTM/i,
+    /^ISO/i,
+    /^MIL/i,
+    /^SAE\s+J/i, // SAE J стандарты (не SAE вязкость)
+    /^DOT/i,
+    /^TYPE\s+D/i,
+    /^GL-\d+/i,
+    /^MT-\d+/i,
+    /^C\d+/i,
+    /^A\d+/i,
+  ];
+  
+  if (excludedPatterns.some(pattern => pattern.test(trimmed))) {
+    return false;
+  }
+  
+  // Паттерн для валидного SAE:
+  // - Multi-grade: цифры + W + (опционально) дефис + цифры (например: 0W-16, 10W-40)
+  // - Single-grade: только цифры (например: 50, 40) - для масел без W
+  // - С W: цифры + W (например: 50W)
+  const saePattern = /^(\d+W(-\d+)?|\d+W|\d+)$/;
+  return saePattern.test(trimmed);
 }
 
 async function saveOilInProdDb(url: string) {
   try {
     const data = await bootstrap.parsing.oilParsing.oil(url);
 
-    console.log('Oil data:', data);
+    log(`Oil data: ${JSON.stringify(data)}\n`);
     
     const res = await axios.post(`${DATABASE_HOST}/api/oils`, {
       data: {
@@ -301,7 +340,7 @@ async function saveOilInProdDb(url: string) {
 
     await axios.put(`${DATABASE_HOST}/api/oils/${oilId}`, d);
     
-    console.log(`✅ Oil "${data.name}" saved successfully`);
+    log(`✅ Oil "${data.name}" saved successfully`);
 
     return data;
   } catch (err) {
@@ -316,141 +355,144 @@ async function saveOilInProdDb(url: string) {
 }
 
 export async function api() {
+  // const data = await bootstrap.parsing.engineParsing.motorInfo('https://podbor.ravenol.ru/1-cars/36-audi/87-100-s4/14211-100-2-0/');
+  // console.log(JSON.stringify(data, null, 2));
+
   // Тестирование парсинга одного мотора
-  // const a = await bootstrap.parsing.carParsing.motorInfo('https://podbor.ravenol.ru/1-cars/36-audi/87-100-s4/14211-100-2-0/')
+  // const a = await bootstrap.parsing.engineParsing.motorInfo('https://podbor.ravenol.ru/1-cars/36-audi/87-100-s4/14211-100-2-0/')
   // console.log(JSON.stringify(a, null, 2));
   // Запуск полного парсинга машин
-  //await saveCarInProdDb();
+  await saveCarInProdDb();
   
   // Примеры сохранения масел
-  await saveOilInProdDb('https://bravoil.ae/product/pro-drift-sn-cf-10w-60-fully-synthetic/')
-  await saveOilInProdDb('https://bravoil.ae/product/pro-pao-sn-0w-20-fully-synthetic/')
-  await saveOilInProdDb('https://bravoil.ae/product/pro-pao-c2-c3-sn-0w-30-fully-synthetic/')
-  await saveOilInProdDb('https://bravoil.ae/product/evo-0w-40-sn-fully-synthetic/')
-  await saveOilInProdDb('https://bravoil.ae/product/evo-5w-50-sn-cf-fully-synthetic/')
-  await saveOilInProdDb('https://bravoil.ae/product/evo-10w-60-sn-cf-fully-synthetic/')
-  await saveOilInProdDb('https://bravoil.ae/product/s-ultra-ec-plus-sp-c3-0w-40-fully-synthetic/')
-  await saveOilInProdDb('https://bravoil.ae/product/s-ultra-ec-sn-5w-30-fully-synthetic/')
-  await saveOilInProdDb('https://bravoil.ae/product/s-ultra-ex-sn-plus-rc-sp-rc-5w-20-fully-synthetic/')
-  await saveOilInProdDb('https://bravoil.ae/product/s-ultra-energy-snrc-0w-16-fully-synthetic/')
-  await saveOilInProdDb('https://bravoil.ae/product/s-ultra-c5-sn-0w-20-fully-synthetic/')
-  await saveOilInProdDb('https://bravoil.ae/product/s-ultra-rn17-fe-sn-0w-20-fully-synthetic/')
-  await saveOilInProdDb('https://bravoil.ae/product/s-ultra-ls-5w-30-fully-synthetic/')
-  await saveOilInProdDb('https://bravoil.ae/product/s-ultra-ms-sn-cf-rc-cf-5w-20-fully-synthetic/')
-  await saveOilInProdDb('https://bravoil.ae/product/s-ultra-c3-sn-5w-30-fully-synthetic/')
-  await saveOilInProdDb('https://bravoil.ae/product/s-ultra-eco-sn-cf-5w-30-fully-synthetic/')
-  await saveOilInProdDb('https://bravoil.ae/product/s-ultra-c1-5w-30-fully-synthetic/')
-  await saveOilInProdDb('https://bravoil.ae/product/s-ultra-fe-sp-5w-30-fully-synthetic/')
-  await saveOilInProdDb('https://bravoil.ae/product/s-ultra-ll-01-fe-sn-0w-30-fully-synthetic/')
-  await saveOilInProdDb('https://bravoil.ae/product/s-ultra-gt1-sn-5w-40-fully-synthetic/')
-  await saveOilInProdDb('https://bravoil.ae/product/s-ultra-rn17-sn-5w-30-fully-synthetic/')
-  await saveOilInProdDb('https://bravoil.ae/product/s-ultra-opl-sn-sp-5w-40-fully-synthetic/')
-  await saveOilInProdDb('https://bravoil.ae/product/s-ultra-b71-2312-0w-30-fully-synthetic/')
-  await saveOilInProdDb('https://bravoil.ae/product/s-ultra-fe-sn-cf-5w-20-fully-synthetic/')
-  await saveOilInProdDb('https://bravoil.ae/product/s-ultra-standard-sn-cf-5w-30-fully-synthetic/')
-  await saveOilInProdDb('https://bravoil.ae/product/bravoil-neo-sn-cf-10w-40-semi-synthetic/')
-  await saveOilInProdDb('https://bravoil.ae/product/s-ultra-c2-c3-sn-plus-5w-30-fully-synthetic/')
-  await saveOilInProdDb('https://bravoil.ae/product/s-ultra-pao-sn-cf-0w-40-fully-synthetic/')
-  await saveOilInProdDb('https://bravoil.ae/product/s-ultra-sn-cf-5w-40-fully-synthetic/')
-  await saveOilInProdDb('https://bravoil.ae/product/s-ultra-plus-sn-sl-cf-5w-30-fully-synthetic/')
-  await saveOilInProdDb('https://bravoil.ae/product/s-ultra-premium-sm-cf-10w-30-semi-synthetic/')
-  await saveOilInProdDb('https://bravoil.ae/product/s-ultra-9000-sl-cf-10w-40-semi-synthetic/')
-  await saveOilInProdDb('https://bravoil.ae/product/s-ultra-7000-sj-cf-15w-40-mineral/')
-  await saveOilInProdDb('https://bravoil.ae/product/s-ultra-5000-sg-cf-20w-50-mineral/')
-  await saveOilInProdDb('https://bravoil.ae/product/s-ultra-3000-sf-cd-50-mineral/')
-  await saveOilInProdDb('https://bravoil.ae/product/s-ultra-pace-sp-0w-30-fully-synthetic/')
-  await saveOilInProdDb('https://bravoil.ae/product/synto-truck-fa-4-fa-4-sn-5w-30-fully-synthetic/')
-  await saveOilInProdDb('https://bravoil.ae/product/synto-truck-extra-ck-4-sn-0w-30-fully-synthetic/')
-  await saveOilInProdDb('https://bravoil.ae/product/synto-truck-extra-hd-ck-4-sn-0w-30-fully-synthetic/')
-  await saveOilInProdDb('https://bravoil.ae/product/synto-truck-plus-cj-4-sn-0w-30-fully-synthetic/')
-  await saveOilInProdDb('https://bravoil.ae/product/synto-truck-ht-plus-cj-4-ci-4-ci-4-15w-40-mineral/')
-  await saveOilInProdDb('https://bravoil.ae/product/synto-truck-uhpd-cj-4-0w-40-fully-synthetic/')
-  await saveOilInProdDb('https://bravoil.ae/product/synto-truck-max-ci-4-plus-sl-10w-40-semi-synthetic/')
-  await saveOilInProdDb('https://bravoil.ae/product/synto-truck-premium-ci-4-sl-0w-30-fully-synthetic/')
-  await saveOilInProdDb('https://bravoil.ae/product/synto-truck-hd-ci-4-sl-10w-40-semi-synthetic/')
-  await saveOilInProdDb('https://bravoil.ae/product/synto-truck-le-ci-4-5w-30-fully-synthetic/')
-  await saveOilInProdDb('https://bravoil.ae/product/synto-truck-xhpd-ci-4-0w-40-fully-synthetic/')
-  await saveOilInProdDb('https://bravoil.ae/product/synto-truck-7000-cg-4-sj-0w-30-fully-synthetic/')
-  await saveOilInProdDb('https://bravoil.ae/product/synto-truck-5000-cf-4-sj-10w-30-semi-synthetic/')
-  await saveOilInProdDb('https://bravoil.ae/product/synto-truck-3000-cf-sf-15w-40-mineral/')
-  await saveOilInProdDb('https://bravoil.ae/product/synto-truck-1000-cd-sf-15w-40-mineral/')
-  await saveOilInProdDb('https://bravoil.ae/product/synto-truck-standard-cc-sc-15w-40-mineral/')
-  await saveOilInProdDb('https://bravoil.ae/product/moto-4t-synth-hd-sn-20w-50-fully-synthetic/')
-  await saveOilInProdDb('https://bravoil.ae/product/moto-4t-plus-sn-5w-40-fully-synthetic/')
-  await saveOilInProdDb('https://bravoil.ae/product/moto-4t-max-sm-10w-60-semi-synthetic/')
-  await saveOilInProdDb('https://bravoil.ae/product/moto-4t-premium-sl-20w-50-mineral/')
-  await saveOilInProdDb('https://bravoil.ae/product/moto-4t-standard-sj-20w-60-mineral/')
-  await saveOilInProdDb('https://bravoil.ae/product/moto-4t-ultra-sg-20w-50-mineral/')
-  await saveOilInProdDb('https://bravoil.ae/product/moto-4t-classic-sf-20w-50-mineral/')
-  await saveOilInProdDb('https://bravoil.ae/product/moto-super-sl-10w-40-semi-synthetic/')
-  await saveOilInProdDb('https://bravoil.ae/product/moto-2t-tc-mineral/')
-  await saveOilInProdDb('https://bravoil.ae/product/syngear-xl-gl-5-75w-90-fully-synthetic/')
-  await saveOilInProdDb('https://bravoil.ae/product/syngear-hd-gl-5-85w-140-mineral/')
-  await saveOilInProdDb('https://bravoil.ae/product/syngear-ultra-gl-5-85w-90-mineral/')
-  await saveOilInProdDb('https://bravoil.ae/product/syngear-hd-plus-gl-5-80w-140-mineral/')
-  await saveOilInProdDb('https://bravoil.ae/product/syngear-g2-gl-5-75w-85-fully-synthetic/')
-  await saveOilInProdDb('https://bravoil.ae/product/syngear-g3-gl-5-75w-140-fully-synhtetic/')
-  await saveOilInProdDb('https://bravoil.ae/product/syngear-g5-gl-5-70w-80-fully-synthetic/')
-  await saveOilInProdDb('https://bravoil.ae/product/syngear-sp-tl-521-45-gl-5-75w-90-fully-synthetic/')
-  await saveOilInProdDb('https://bravoil.ae/product/syngear-lsd-gl-5-75w-140-mineral/')
-  await saveOilInProdDb('https://bravoil.ae/product/syngear-fe-gl-4-75w-80-fully-synthetic/')
-  await saveOilInProdDb('https://bravoil.ae/product/syngear-mtf-gl-4-gl-4-75w-90-fully-synthetic/')
-  await saveOilInProdDb('https://bravoil.ae/product/syngear-2330-gl-4-75w-80-fully-synthetic/')
-  await saveOilInProdDb('https://bravoil.ae/product/syngear-plus-gl-4-75w-80-fully-synthetic/')
-  await saveOilInProdDb('https://bravoil.ae/product/syngear-extra-gl-4-85w-90-mineral/')
-  await saveOilInProdDb('https://bravoil.ae/product/syngear-trans-gl-3-80w-90-mineral/')
-  await saveOilInProdDb('https://bravoil.ae/product/syngear-pro-gl-1-sae-140-mineral/')
-  await saveOilInProdDb('https://bravoil.ae/product/syngear-mt-mt-1-50-fully-synthetic/')
-  await saveOilInProdDb('https://bravoil.ae/product/syngear-ep-75w-90-fully-synthetic/')
-  await saveOilInProdDb('https://bravoil.ae/product/acto-5-1-dot-5-1-fully-synthetic/')
-  await saveOilInProdDb('https://bravoil.ae/product/acto-4-dot-4-fully-synthetic/')
-  await saveOilInProdDb('https://bravoil.ae/product/acto-4-plus-dot-4-fully-synthetic/')
-  await saveOilInProdDb('https://bravoil.ae/product/acto-4-lv-dot-4-fully-synthetic/')
-  await saveOilInProdDb('https://bravoil.ae/product/acto-blue-dot-4-fully-synthetic/')
-  await saveOilInProdDb('https://bravoil.ae/product/acto-3-dot-3-fully-synthetic/')
-  await saveOilInProdDb('https://bravoil.ae/product/subzero-60/')
-  await saveOilInProdDb('https://bravoil.ae/product/subzero-psi/')
-  await saveOilInProdDb('https://bravoil.ae/product/subzero-g13/')
-  await saveOilInProdDb('https://bravoil.ae/product/subzero-g12-2/')
-  await saveOilInProdDb('https://bravoil.ae/product/subzero-g12/')
-  await saveOilInProdDb('https://bravoil.ae/product/subzero-g11/')
-  await saveOilInProdDb('https://bravoil.ae/product/subzero-lst-100/')
-  await saveOilInProdDb('https://bravoil.ae/product/subzero-fl22/')
-  await saveOilInProdDb('https://bravoil.ae/product/subzero-asia/')
-  await saveOilInProdDb('https://bravoil.ae/product/subzero-lst-18-100/')
-  await saveOilInProdDb('https://bravoil.ae/product/subzero-hoat/')
-  await saveOilInProdDb('https://bravoil.ae/product/subzero-6277m/')
-  await saveOilInProdDb('https://bravoil.ae/product/subzero-hybrid/')
-  await saveOilInProdDb('https://bravoil.ae/product/subzero-type-d/')
-  await saveOilInProdDb('https://bravoil.ae/product/switch-plus-cf-20w-50-mineral/')
-  await saveOilInProdDb('https://bravoil.ae/product/switch-premium-sm-20w-50-mineral/')
-  await saveOilInProdDb('https://bravoil.ae/product/switch-la-40-mineral/')
-  await saveOilInProdDb('https://bravoil.ae/product/agro-utto-gl-4-10w-30-mineral/')
-  await saveOilInProdDb('https://bravoil.ae/product/agro-stou-cg-4-gl-4-20w-40-mineral/')
+  // await saveOilInProdDb('https://bravoil.ae/product/pro-drift-sn-cf-10w-60-fully-synthetic/')
+  // await saveOilInProdDb('https://bravoil.ae/product/pro-pao-sn-0w-20-fully-synthetic/')
+  // await saveOilInProdDb('https://bravoil.ae/product/pro-pao-c2-c3-sn-0w-30-fully-synthetic/')
+  // await saveOilInProdDb('https://bravoil.ae/product/evo-0w-40-sn-fully-synthetic/')
+  // await saveOilInProdDb('https://bravoil.ae/product/evo-5w-50-sn-cf-fully-synthetic/')
+  // await saveOilInProdDb('https://bravoil.ae/product/evo-10w-60-sn-cf-fully-synthetic/')
+  // await saveOilInProdDb('https://bravoil.ae/product/s-ultra-ec-plus-sp-c3-0w-40-fully-synthetic/')
+  // await saveOilInProdDb('https://bravoil.ae/product/s-ultra-ec-sn-5w-30-fully-synthetic/')
+  // await saveOilInProdDb('https://bravoil.ae/product/s-ultra-ex-sn-plus-rc-sp-rc-5w-20-fully-synthetic/')
+  // await saveOilInProdDb('https://bravoil.ae/product/s-ultra-energy-snrc-0w-16-fully-synthetic/')
+  // await saveOilInProdDb('https://bravoil.ae/product/s-ultra-c5-sn-0w-20-fully-synthetic/')
+  // await saveOilInProdDb('https://bravoil.ae/product/s-ultra-rn17-fe-sn-0w-20-fully-synthetic/')
+  // await saveOilInProdDb('https://bravoil.ae/product/s-ultra-ls-5w-30-fully-synthetic/')
+  // await saveOilInProdDb('https://bravoil.ae/product/s-ultra-ms-sn-cf-rc-cf-5w-20-fully-synthetic/')
+  // await saveOilInProdDb('https://bravoil.ae/product/s-ultra-c3-sn-5w-30-fully-synthetic/')
+  // await saveOilInProdDb('https://bravoil.ae/product/s-ultra-eco-sn-cf-5w-30-fully-synthetic/')
+  // await saveOilInProdDb('https://bravoil.ae/product/s-ultra-c1-5w-30-fully-synthetic/')
+  // await saveOilInProdDb('https://bravoil.ae/product/s-ultra-fe-sp-5w-30-fully-synthetic/')
+  // await saveOilInProdDb('https://bravoil.ae/product/s-ultra-ll-01-fe-sn-0w-30-fully-synthetic/')
+  // await saveOilInProdDb('https://bravoil.ae/product/s-ultra-gt1-sn-5w-40-fully-synthetic/')
+  // await saveOilInProdDb('https://bravoil.ae/product/s-ultra-rn17-sn-5w-30-fully-synthetic/')
+  // await saveOilInProdDb('https://bravoil.ae/product/s-ultra-opl-sn-sp-5w-40-fully-synthetic/')
+  // await saveOilInProdDb('https://bravoil.ae/product/s-ultra-b71-2312-0w-30-fully-synthetic/')
+  // await saveOilInProdDb('https://bravoil.ae/product/s-ultra-fe-sn-cf-5w-20-fully-synthetic/')
+  // await saveOilInProdDb('https://bravoil.ae/product/s-ultra-standard-sn-cf-5w-30-fully-synthetic/')
+  // await saveOilInProdDb('https://bravoil.ae/product/bravoil-neo-sn-cf-10w-40-semi-synthetic/')
+  // await saveOilInProdDb('https://bravoil.ae/product/s-ultra-c2-c3-sn-plus-5w-30-fully-synthetic/')
+  // await saveOilInProdDb('https://bravoil.ae/product/s-ultra-pao-sn-cf-0w-40-fully-synthetic/')
+  // await saveOilInProdDb('https://bravoil.ae/product/s-ultra-sn-cf-5w-40-fully-synthetic/')
+  // await saveOilInProdDb('https://bravoil.ae/product/s-ultra-plus-sn-sl-cf-5w-30-fully-synthetic/')
+  // await saveOilInProdDb('https://bravoil.ae/product/s-ultra-premium-sm-cf-10w-30-semi-synthetic/')
+  // await saveOilInProdDb('https://bravoil.ae/product/s-ultra-9000-sl-cf-10w-40-semi-synthetic/')
+  // await saveOilInProdDb('https://bravoil.ae/product/s-ultra-7000-sj-cf-15w-40-mineral/')
+  // await saveOilInProdDb('https://bravoil.ae/product/s-ultra-5000-sg-cf-20w-50-mineral/')
+  // await saveOilInProdDb('https://bravoil.ae/product/s-ultra-3000-sf-cd-50-mineral/')
+  // await saveOilInProdDb('https://bravoil.ae/product/s-ultra-pace-sp-0w-30-fully-synthetic/')
+  // await saveOilInProdDb('https://bravoil.ae/product/synto-truck-fa-4-fa-4-sn-5w-30-fully-synthetic/')
+  // await saveOilInProdDb('https://bravoil.ae/product/synto-truck-extra-ck-4-sn-0w-30-fully-synthetic/')
+  // await saveOilInProdDb('https://bravoil.ae/product/synto-truck-extra-hd-ck-4-sn-0w-30-fully-synthetic/')
+  // await saveOilInProdDb('https://bravoil.ae/product/synto-truck-plus-cj-4-sn-0w-30-fully-synthetic/')
+  // await saveOilInProdDb('https://bravoil.ae/product/synto-truck-ht-plus-cj-4-ci-4-ci-4-15w-40-mineral/')
+  // await saveOilInProdDb('https://bravoil.ae/product/synto-truck-uhpd-cj-4-0w-40-fully-synthetic/')
+  // await saveOilInProdDb('https://bravoil.ae/product/synto-truck-max-ci-4-plus-sl-10w-40-semi-synthetic/')
+  // await saveOilInProdDb('https://bravoil.ae/product/synto-truck-premium-ci-4-sl-0w-30-fully-synthetic/')
+  // await saveOilInProdDb('https://bravoil.ae/product/synto-truck-hd-ci-4-sl-10w-40-semi-synthetic/')
+  // await saveOilInProdDb('https://bravoil.ae/product/synto-truck-le-ci-4-5w-30-fully-synthetic/')
+  // await saveOilInProdDb('https://bravoil.ae/product/synto-truck-xhpd-ci-4-0w-40-fully-synthetic/')
+  // await saveOilInProdDb('https://bravoil.ae/product/synto-truck-7000-cg-4-sj-0w-30-fully-synthetic/')
+  // await saveOilInProdDb('https://bravoil.ae/product/synto-truck-5000-cf-4-sj-10w-30-semi-synthetic/')
+  // await saveOilInProdDb('https://bravoil.ae/product/synto-truck-3000-cf-sf-15w-40-mineral/')
+  // await saveOilInProdDb('https://bravoil.ae/product/synto-truck-1000-cd-sf-15w-40-mineral/')
+  // await saveOilInProdDb('https://bravoil.ae/product/synto-truck-standard-cc-sc-15w-40-mineral/')
+  // await saveOilInProdDb('https://bravoil.ae/product/moto-4t-synth-hd-sn-20w-50-fully-synthetic/')
+  // await saveOilInProdDb('https://bravoil.ae/product/moto-4t-plus-sn-5w-40-fully-synthetic/')
+  // await saveOilInProdDb('https://bravoil.ae/product/moto-4t-max-sm-10w-60-semi-synthetic/')
+  // await saveOilInProdDb('https://bravoil.ae/product/moto-4t-premium-sl-20w-50-mineral/')
+  // await saveOilInProdDb('https://bravoil.ae/product/moto-4t-standard-sj-20w-60-mineral/')
+  // await saveOilInProdDb('https://bravoil.ae/product/moto-4t-ultra-sg-20w-50-mineral/')
+  // await saveOilInProdDb('https://bravoil.ae/product/moto-4t-classic-sf-20w-50-mineral/')
+  // await saveOilInProdDb('https://bravoil.ae/product/moto-super-sl-10w-40-semi-synthetic/')
+  // await saveOilInProdDb('https://bravoil.ae/product/moto-2t-tc-mineral/')
+  // await saveOilInProdDb('https://bravoil.ae/product/syngear-xl-gl-5-75w-90-fully-synthetic/')
+  // await saveOilInProdDb('https://bravoil.ae/product/syngear-hd-gl-5-85w-140-mineral/')
+  // await saveOilInProdDb('https://bravoil.ae/product/syngear-ultra-gl-5-85w-90-mineral/')
+  // await saveOilInProdDb('https://bravoil.ae/product/syngear-hd-plus-gl-5-80w-140-mineral/')
+  // await saveOilInProdDb('https://bravoil.ae/product/syngear-g2-gl-5-75w-85-fully-synthetic/')
+  // await saveOilInProdDb('https://bravoil.ae/product/syngear-g3-gl-5-75w-140-fully-synhtetic/')
+  // await saveOilInProdDb('https://bravoil.ae/product/syngear-g5-gl-5-70w-80-fully-synthetic/')
+  // await saveOilInProdDb('https://bravoil.ae/product/syngear-sp-tl-521-45-gl-5-75w-90-fully-synthetic/')
+  // await saveOilInProdDb('https://bravoil.ae/product/syngear-lsd-gl-5-75w-140-mineral/')
+  // await saveOilInProdDb('https://bravoil.ae/product/syngear-fe-gl-4-75w-80-fully-synthetic/')
+  // await saveOilInProdDb('https://bravoil.ae/product/syngear-mtf-gl-4-gl-4-75w-90-fully-synthetic/')
+  // await saveOilInProdDb('https://bravoil.ae/product/syngear-2330-gl-4-75w-80-fully-synthetic/')
+  // await saveOilInProdDb('https://bravoil.ae/product/syngear-plus-gl-4-75w-80-fully-synthetic/')
+  // await saveOilInProdDb('https://bravoil.ae/product/syngear-extra-gl-4-85w-90-mineral/')
+  // await saveOilInProdDb('https://bravoil.ae/product/syngear-trans-gl-3-80w-90-mineral/')
+  // await saveOilInProdDb('https://bravoil.ae/product/syngear-pro-gl-1-sae-140-mineral/')
+  // await saveOilInProdDb('https://bravoil.ae/product/syngear-mt-mt-1-50-fully-synthetic/')
+  // await saveOilInProdDb('https://bravoil.ae/product/syngear-ep-75w-90-fully-synthetic/')
+  // await saveOilInProdDb('https://bravoil.ae/product/acto-5-1-dot-5-1-fully-synthetic/')
+  // await saveOilInProdDb('https://bravoil.ae/product/acto-4-dot-4-fully-synthetic/')
+  // await saveOilInProdDb('https://bravoil.ae/product/acto-4-plus-dot-4-fully-synthetic/')
+  // await saveOilInProdDb('https://bravoil.ae/product/acto-4-lv-dot-4-fully-synthetic/')
+  // await saveOilInProdDb('https://bravoil.ae/product/acto-blue-dot-4-fully-synthetic/')
+  // await saveOilInProdDb('https://bravoil.ae/product/acto-3-dot-3-fully-synthetic/')
+  // await saveOilInProdDb('https://bravoil.ae/product/subzero-60/')
+  // await saveOilInProdDb('https://bravoil.ae/product/subzero-psi/')
+  // await saveOilInProdDb('https://bravoil.ae/product/subzero-g13/')
+  // await saveOilInProdDb('https://bravoil.ae/product/subzero-g12-2/')
+  // await saveOilInProdDb('https://bravoil.ae/product/subzero-g12/')
+  // await saveOilInProdDb('https://bravoil.ae/product/subzero-g11/')
+  // await saveOilInProdDb('https://bravoil.ae/product/subzero-lst-100/')
+  // await saveOilInProdDb('https://bravoil.ae/product/subzero-fl22/')
+  // await saveOilInProdDb('https://bravoil.ae/product/subzero-asia/')
+  // await saveOilInProdDb('https://bravoil.ae/product/subzero-lst-18-100/')
+  // await saveOilInProdDb('https://bravoil.ae/product/subzero-hoat/')
+  // await saveOilInProdDb('https://bravoil.ae/product/subzero-6277m/')
+  // await saveOilInProdDb('https://bravoil.ae/product/subzero-hybrid/')
+  // await saveOilInProdDb('https://bravoil.ae/product/subzero-type-d/')
+  // await saveOilInProdDb('https://bravoil.ae/product/switch-plus-cf-20w-50-mineral/')
+  // await saveOilInProdDb('https://bravoil.ae/product/switch-premium-sm-20w-50-mineral/')
+  // await saveOilInProdDb('https://bravoil.ae/product/switch-la-40-mineral/')
+  // await saveOilInProdDb('https://bravoil.ae/product/agro-utto-gl-4-10w-30-mineral/')
+  // await saveOilInProdDb('https://bravoil.ae/product/agro-stou-cg-4-gl-4-20w-40-mineral/')
 
 
 
 
-  // Kpp
-  await saveOilInProdDb('https://bravoil.ae/product/synthpower-dct-fully-synthetic/')
-  await saveOilInProdDb('https://bravoil.ae/product/synthpower-cvt-fully-synthetic/')
-  await saveOilInProdDb('https://bravoil.ae/product/synthpower-multi-fully-synthetic/')
-  await saveOilInProdDb('https://bravoil.ae/product/synthpower-d-vi-dexron-vi-fully-synthetic/')
-  await saveOilInProdDb('https://bravoil.ae/product/synthpower-atf4-fully-synthetic/')
-  await saveOilInProdDb('https://bravoil.ae/product/synthpower-d-iii-dexron-iiig-fully-synthetic/')
-  await saveOilInProdDb('https://bravoil.ae/product/synthpower-d-ii-dexron-iid-mineral/')
-  await saveOilInProdDb('https://bravoil.ae/product/synthpower-zfl-fully-synthetic/')
-  await saveOilInProdDb('https://bravoil.ae/product/synthpower-plus-fully-synthetic/')
-  await saveOilInProdDb('https://bravoil.ae/product/synthpower-chf-fully-synthetic/')
-  await saveOilInProdDb('https://bravoil.ae/product/synthpower-9g-tronic-fully-synthetic/')
+  // // Kpp
+  // await saveOilInProdDb('https://bravoil.ae/product/synthpower-dct-fully-synthetic/')
+  // await saveOilInProdDb('https://bravoil.ae/product/synthpower-cvt-fully-synthetic/')
+  // await saveOilInProdDb('https://bravoil.ae/product/synthpower-multi-fully-synthetic/')
+  // await saveOilInProdDb('https://bravoil.ae/product/synthpower-d-vi-dexron-vi-fully-synthetic/')
+  // await saveOilInProdDb('https://bravoil.ae/product/synthpower-atf4-fully-synthetic/')
+  // await saveOilInProdDb('https://bravoil.ae/product/synthpower-d-iii-dexron-iiig-fully-synthetic/')
+  // await saveOilInProdDb('https://bravoil.ae/product/synthpower-d-ii-dexron-iid-mineral/')
+  // await saveOilInProdDb('https://bravoil.ae/product/synthpower-zfl-fully-synthetic/')
+  // await saveOilInProdDb('https://bravoil.ae/product/synthpower-plus-fully-synthetic/')
+  // await saveOilInProdDb('https://bravoil.ae/product/synthpower-chf-fully-synthetic/')
+  // await saveOilInProdDb('https://bravoil.ae/product/synthpower-9g-tronic-fully-synthetic/')
 
-  await saveOilInProdDb('https://bravoil.ae/product/synthpower-8hp-fully-synthetic/')
-  await saveOilInProdDb('https://bravoil.ae/product/synthpower-6hp-fully-synthetic/')
+  // await saveOilInProdDb('https://bravoil.ae/product/synthpower-8hp-fully-synthetic/')
+  // await saveOilInProdDb('https://bravoil.ae/product/synthpower-6hp-fully-synthetic/')
 
-  await saveOilInProdDb('https://bravoil.ae/product/synthpower-lhm-plus-lhm-fluid-fully-synthetic/')
-  await saveOilInProdDb('https://bravoil.ae/product/synthpower-psf/')
+  // await saveOilInProdDb('https://bravoil.ae/product/synthpower-lhm-plus-lhm-fluid-fully-synthetic/')
+  // await saveOilInProdDb('https://bravoil.ae/product/synthpower-psf/')
 
-  await saveOilInProdDb('https://bravoil.ae/product/synthpower-a-atf-type-a-mineral/')
-  await saveOilInProdDb('https://bravoil.ae/product/synthpower-to-4-hd-60-fully-synthetic/')
-  await saveOilInProdDb('https://bravoil.ae/product/synthpower-hd-10w-mineral/')
+  // await saveOilInProdDb('https://bravoil.ae/product/synthpower-a-atf-type-a-mineral/')
+  // await saveOilInProdDb('https://bravoil.ae/product/synthpower-to-4-hd-60-fully-synthetic/')
+  // await saveOilInProdDb('https://bravoil.ae/product/synthpower-hd-10w-mineral/')
 }

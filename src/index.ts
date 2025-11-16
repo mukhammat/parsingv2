@@ -5,7 +5,7 @@ import { p } from './oils.js'
 
 const main = async () => {
     try {
-        await p()
+        //await p()
         await api()
     } catch (error) {
         if(error instanceof Error) {
